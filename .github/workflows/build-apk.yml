@@ -1,0 +1,89 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed only to attach the APK to a GitHub Release (tags like v1.0)
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK parts needed by Godot 4.3
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" "cmdline-tools;latest" "ndk;23.2.8568313"
+
+      - name: Download Godot and export templates
+        run: |
+          BASE=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          wget -q $BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip -O godot.zip
+          wget -q $BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz -O templates.tpz
+          unzip -q godot.zip
+          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          unzip -q templates.tpz -d tpl
+          mv tpl/templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+          godot --version
+
+      - name: Create debug keystore (temporary, only for test APK)
+        run: |
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore $HOME/debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+
+      - name: Configure Godot editor for Android export
+        run: |
+          mkdir -p ~/.config/godot
+          for F in editor_settings-4.tres editor_settings-4.3.tres; do
+          cat > ~/.config/godot/$F <<EOF2
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF2
+          done
+          sed -i 's/^ *//' ~/.config/godot/editor_settings-4*.tres
+
+      - name: Import project (twice, first run builds the script cache)
+        working-directory: game
+        run: |
+          godot --headless --import || true
+          godot --headless --import || true
+
+      - name: Export APK
+        working-directory: game
+        run: |
+          godot --headless --export-debug "Android" ../KhairagarhBattle.apk
+          ls -la ../KhairagarhBattle.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KhairagarhBattle-APK
+          path: KhairagarhBattle.apk
+          if-no-files-found: error
+
+      - name: Attach APK to GitHub Release (only when you push a tag like v1.0)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: KhairagarhBattle.apk
