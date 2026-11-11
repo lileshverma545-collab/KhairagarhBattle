@@ -1,0 +1,5 @@
+# Optional: free HTTPS for the Admin Panel using Caddy (https://caddyserver.com).
+# Replace admin.example.com with YOUR domain (its DNS must point to your server), then run: caddy run
+admin.example.com {
+    reverse_proxy 127.0.0.1:8080
+}

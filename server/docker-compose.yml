@@ -1,0 +1,15 @@
+# Run from the repository root:   docker compose -f server/docker-compose.yml up -d --build
+services:
+  khairagarh-battle:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    container_name: khairagarh-battle
+    restart: unless-stopped
+    ports:
+      - "7777:7777/udp"   # game
+      - "8080:8080/tcp"   # admin panel (put HTTPS in front of it, see README)
+    volumes:
+      - kbdata:/data
+volumes:
+  kbdata:

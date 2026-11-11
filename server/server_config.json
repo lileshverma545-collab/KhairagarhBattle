@@ -1,0 +1,9 @@
+{
+  "port": 7777,
+  "max_clients": 120,
+  "match_seconds": 300,
+  "kill_target": 20,
+  "respawn_seconds": 4,
+  "snapshot_hz": 15,
+  "min_players_to_start": 2
+}
