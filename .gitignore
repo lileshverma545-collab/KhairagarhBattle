@@ -1,0 +1,17 @@
+# Godot
+game/.godot/
+game/*.translation
+*.apk
+*.aab
+*.keystore
+*.jks
+# Server data / secrets (NEVER upload these)
+data/
+admins.json
+settings.json
+status.json
+setup_key.txt
+*.pem
+*.key
+.env
+__pycache__/
