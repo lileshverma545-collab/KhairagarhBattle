@@ -1,9 +1,13 @@
-name: Build Khairagarh Battle APK
+
+name: Build Android APK
 
 on:
   push:
-    branches: [main, master]
-    tags: ["v*"]
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -11,49 +15,112 @@ permissions:
 
 env:
   GODOT_VERSION: "4.3"
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  ANDROID_HOME: /usr/local/lib/android/sdk
 
 jobs:
   build:
+    name: Build Khairagarh Battle APK
     runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+    steps:
+      # 1. Download project source code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Install Java 17
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK parts needed by Godot 4.3
+      # 3. Setup Android SDK without the broken setup-android action
+      - name: Setup Android SDK
+        shell: bash
         run: |
-          mkdir -p $ANDROID_SDK_ROOT/licenses
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_SDK_ROOT/licenses/android-sdk-license
-          echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_SDK_ROOT/licenses/android-sdk-preview-license
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" "cmdline-tools;latest" "ndk;23.2.8568313"
+          set -e
 
-      - name: Download Godot and export templates
+          SDK="$ANDROID_SDK_ROOT"
+
+          if [ ! -d "$SDK/cmdline-tools" ]; then
+            echo "Android command-line tools directory not found: $SDK"
+            exit 1
+          fi
+
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found in Android SDK."
+            exit 1
+          fi
+
+          echo "Using SDK Manager: $SDKMANAGER"
+
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
+
+          "$SDKMANAGER" --sdk_root="$SDK" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;23.2.8568313"
+
+      # 4. Download Godot 4.3 and Android export templates
+      - name: Install Godot 4.3
+        shell: bash
         run: |
-          BASE=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
-          wget -q $BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip -O godot.zip
-          wget -q $BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz -O templates.tpz
+          set -e
+
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" -O godot.zip
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -O templates.tpz
+
           unzip -q godot.zip
-          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
-          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-          unzip -q templates.tpz -d tpl
-          mv tpl/templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+
+          sudo mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
+
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+
+          unzip -q templates.tpz -d godot-templates
+
+          cp -a godot-templates/templates/. \
+            "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
           godot --version
 
-      - name: Create debug keystore (temporary, only for test APK)
+      # 5. Create temporary Android debug keystore
+      - name: Create Debug Keystore
+        shell: bash
         run: |
-          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore $HOME/debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          set -e
 
-      - name: Configure Godot editor for Android export
+          keytool -genkeypair \
+            -v \
+            -keystore "$HOME/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 9999 \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -deststoretype PKCS12
+
+      # 6. Configure Godot Android export settings
+      - name: Configure Godot Android Settings
+        shell: bash
         run: |
-          mkdir -p ~/.config/godot
+          set -e
+
+          mkdir -p "$HOME/.config/godot"
+
           for F in editor_settings-4.tres editor_settings-4.3.tres; do
-          cat > ~/.config/godot/$F <<EOF2
+            cat > "$HOME/.config/godot/$F" <<EOF
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
@@ -62,30 +129,69 @@ jobs:
           export/android/debug_keystore = "$HOME/debug.keystore"
           export/android/debug_keystore_user = "androiddebugkey"
           export/android/debug_keystore_pass = "android"
-          EOF2
+          EOF
           done
-          sed -i 's/^ *//' ~/.config/godot/editor_settings-4*.tres
 
-      - name: Import project (twice, first run builds the script cache)
+      # 7. Verify Godot project and Android export preset
+      - name: Verify Project
         working-directory: game
+        shell: bash
         run: |
-          godot --headless --import || true
-          godot --headless --import || true
+          set -e
 
-      - name: Export APK
+          if [ ! -f project.godot ]; then
+            echo "ERROR: game/project.godot not found."
+            exit 1
+          fi
+
+          if [ ! -f export_presets.cfg ]; then
+            echo "ERROR: game/export_presets.cfg not found."
+            exit 1
+          fi
+
+          if ! grep -q 'name="Android"' export_presets.cfg; then
+            echo 'ERROR: Android export preset not found. Preset name must be Android.'
+            exit 1
+          fi
+
+          echo "Godot project and Android preset verified."
+
+      # 8. Import project resources
+      - name: Import Godot Project
         working-directory: game
+        shell: bash
         run: |
-          godot --headless --export-debug "Android" ../KhairagarhBattle.apk
-          ls -la ../KhairagarhBattle.apk
+          set -e
+          godot --headless --editor --path . --import
 
-      - name: Upload APK artifact
+      # 9. Export Android APK
+      - name: Export Android APK
+        working-directory: game
+        shell: bash
+        run: |
+          set -e
+
+          godot --headless --path . \
+            --export-debug "Android" ../KhairagarhBattle.apk
+
+          if [ ! -s ../KhairagarhBattle.apk ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          ls -lh ../KhairagarhBattle.apk
+
+      # 10. Upload APK as GitHub Actions artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: KhairagarhBattle-APK
           path: KhairagarhBattle.apk
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Attach APK to GitHub Release (only when you push a tag like v1.0)
+      # 11. Attach APK to GitHub Release when pushing a version tag
+      - name: Publish APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
