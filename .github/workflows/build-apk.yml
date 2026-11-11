@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # needed only to attach the APK to a GitHub Release (tags like v1.0)
+  contents: write
 
 env:
   GODOT_VERSION: "4.3"
@@ -27,7 +27,10 @@ jobs:
 
       - name: Install Android SDK parts needed by Godot 4.3
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
+          mkdir -p $ANDROID_SDK_ROOT/licenses
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_SDK_ROOT/licenses/android-sdk-license
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_SDK_ROOT/licenses/android-sdk-preview-license
+          yes | sdkmanager --licenses || true
           sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" "cmdline-tools;latest" "ndk;23.2.8568313"
 
       - name: Download Godot and export templates
